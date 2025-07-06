@@ -18,24 +18,32 @@ from chromadb.utils import embedding_functions
 from tenacity import retry, stop_after_attempt, wait_exponential
 from ratelimit import limits, sleep_and_retry
 import tiktoken
+
+# Show statistics
+import psutil
+import pynvml
+import streamlit as st
+import pandas as pd
+import plotly.express as px
 # import pkg_resources
 
-# Configuration
-MODEL_NAME = "phi3:mini"
-# OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434")
-OLLAMA_API_URL = "http://localhost:11434"  # Default Ollama API URL
-# MONGODB_URI = st.secrets.get("MONGODB_URI", os.getenv("MONGODB_URI", "mongodb://localhost:27017/"))
-MONGODB_URI = "mongodb://localhost:27017/"
-DATABASE_NAME = "ai_assistant"
-COLLECTION_NAME = "chat_history"
-CHROMCHADB_COLLECTION_NAME = "ai_assistant_memory"
-CHROMADB_PERSIST_DIR = os.getenv("CHROMADB_PERSIST_DIR", "./chromadb_data")
+from dotenv import dotenv_values
 
-MAX_CONTEXT_LENGTH = 4000
-CONTEXT_WINDOW = 10
-SUMMARIZE_THRESHOLD = 15
-CALLS = 10  # Rate limit: calls per minute
-PERIOD = 60
+config = dotenv_values(".env")
+# Configuration
+MODEL_NAME = config["MODEL_NAME"]
+OLLAMA_API_URL = config["OLLAMA_API_URL"]
+MONGODB_URI = config["MONGODB_URI"]
+DATABASE_NAME = config["DATABASE_NAME"]
+COLLECTION_NAME = config["COLLECTION_NAME"]
+CHROMCHADB_COLLECTION_NAME = config["CHROMCHADB_COLLECTION_NAME"]
+CHROMADB_PERSIST_DIR = config["CHROMADB_PERSIST_DIR"]
+
+MAX_CONTEXT_LENGTH = int(config["MAX_CONTEXT_LENGTH"])
+CONTEXT_WINDOW = int(config["CONTEXT_WINDOW"])
+SUMMARIZE_THRESHOLD = int(config["SUMMARIZE_THRESHOLD"])
+CALLS = int(config["CALLS"])
+PERIOD = int(config["PERIOD"])
 
 # Custom Ollama Embedding Function
 class OllamaEmbeddingFunction:
@@ -122,7 +130,7 @@ if mongo_client:
 
 # Page configuration
 st.set_page_config(
-    page_title="🌟 Universal AI Assistant",
+    page_title="NoCapGenAI",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -555,8 +563,19 @@ def load_all_sessions_with_messages() -> list:
                         "assistant": chat.get("assistant_response", "")
                     })
 
+            # Handle sessions with a single message
+            if not messages and session_messages:
+                # If no user-assistant pair but session exists, create a minimal message
+                chat = session_messages[0]
+                if chat.get("user_message"):
+                    messages.append({
+                        "user": chat.get("user_message", ""),
+                        "assistant": chat.get("assistant_response", "No response yet")
+                    })
+
+            # Generate title if none exists
             if not title:
-                title = messages[0]["user"][:50] if messages else "Untitled Session"
+                title = generate_session_title(messages) if messages else "Untitled Session"
 
             all_sessions.append({
                 "session_id": session_id,
@@ -577,20 +596,35 @@ def generate_session_title(messages: list, model: str = MODEL_NAME) -> str:
     if not messages:
         return "Untitled Session"
 
-    context_snippet = "\n".join(
-        f"User: {m['content']}" for m in messages[:3] if m["role"] == "user"
-    )
+    # Use the first user message if available
+    context_snippet = ""
+    for m in messages[:3]:
+        if isinstance(m, dict) and m.get("role") == "user":
+            context_snippet = m["content"][:100]
+            break
+        elif isinstance(m, dict) and m.get("user"):
+            context_snippet = m["user"][:100]
+            break
+
+    if not context_snippet:
+        return "Untitled Session"
 
     prompt = f"""
     Based on the following conversation, generate a short and descriptive title (max 10 words):
-    {context_snippet}
+    User: {context_snippet}...
+    Return only the title, no explanation or additional text.
     Title:"""
 
     try:
         title = call_ollama(prompt, model)
-        return title.strip().replace('"', '')
+        # Extract only the title (remove any explanation or extra text)
+        title = title.strip().replace('"', '')
+        # Sanitize title: remove newlines, special characters, and limit length
+        title = re.sub(r'[\n\r\t<>:"/\\|?*]', '', title)
+        title = title[:50]  # Limit to 50 characters to avoid long filenames
+        return title if title else context_snippet[:50]
     except:
-        return "Untitled Session"
+        return context_snippet[:50] if context_snippet else "Untitled Session"
 
 def get_chat_stats() -> tuple:
     """Get chat statistics."""
@@ -608,17 +642,31 @@ def get_chat_stats() -> tuple:
 
 def generate_markdown_export(messages: list, title: str = "Chat Session") -> str:
     """Generate Markdown export of chat session."""
+    if not messages:
+        return f"# {title}\n\n**Generated on:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n**Model:** {MODEL_NAME}\n\n**Note:** No messages available in this session.\n"
+
     export_md = f"# {title}\n\n**Generated on:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n**Model:** {MODEL_NAME}\n\n"
     for i, msg in enumerate(messages):
-        export_md += f"**User {i+1}:**\n{msg['user']}\n\n"
-        export_md += f"**Assistant:**\n{msg['assistant']}\n\n"
+        user_text = msg.get("user", msg.get("content", "")) if msg.get("role") == "user" else msg.get("user", "")
+        assistant_text = msg.get("assistant", msg.get("content", "")) if msg.get("role") == "assistant" else msg.get("assistant", "")
+        
+        if user_text:
+            export_md += f"**User {i//2 + 1}:**\n{user_text}\n\n"
+
+        if assistant_text:
+            export_md += f"**Assistant:**\n{assistant_text}\n\n"
+    export_md += "\n---\n\n**End of Session**\n"
     return export_md
 
 def export_as_markdown_button(messages: list, title: str):
     """Render a button to download chat as Markdown."""
+    # Sanitize title for use in filename
+    safe_title = re.sub(r'[\n\r\t<>:"/\\|?*]', '', title)[:50]
+    safe_title = safe_title if safe_title else "Chat_Session"
+    
     md_content = generate_markdown_export(messages, title)
     b64 = base64.b64encode(md_content.encode()).decode()
-    href = f'<a href="data:text/markdown;base64,{b64}" download="{title}.md">📥 Download Chat as Markdown</a>'
+    href = f'<a href="data:text/markdown;base64,{b64}" download="{safe_title}.md">📥 Download Chat as Markdown</a>'
     st.markdown(href, unsafe_allow_html=True)
 
 # Sidebar
@@ -669,6 +717,10 @@ with st.sidebar:
     
     st.header("💬 Session Management")
     if st.button("🆕 New Chat Session"):
+        st.session_state.show_stats = False
+        st.session_state.show_history = False
+        st.session_state.show_sessions_history = False
+
         st.session_state.messages = []
         st.session_state.session_id = str(uuid.uuid4())
         # cleanup_mongodb()  # Clean up MongoDB connection on new session
@@ -696,7 +748,7 @@ with st.sidebar:
     
     if st.button("📚 Chat History"):
         st.session_state.show_history = True
-    
+
     if st.button("🔄 Load All Sessions"):
         st.session_state.show_sessions_history = True
 
@@ -730,8 +782,8 @@ with st.sidebar:
 # Main header
 st.markdown("""
 <div class="main-header">
-    <h1>🌟 Universal AI Assistant</h1>
-    <p>Your all-in-one expert for coding, learning, brainstorming, and more — powered by Ollama</p>
+    <h1>🤖 NoCapGenAI</h1>
+    <p>Fast, flexible, and fully local — your all-in-one Generative AI assistant powered by Ollama, MongoDB, and ChromaDB.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -739,19 +791,55 @@ st.markdown("""
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+
 # Show statistics
 if st.session_state.get("show_stats", False):
+    st.session_state.show_sessions_history = False
+    st.session_state.show_history = False
+
     st.header("📊 Usage Statistics")
     total_chats, prompt_types = get_chat_stats()
     
+    # CPU Usage
+    cpu_usage = psutil.cpu_percent(interval=1)
+    
+    # RAM Usage
+    memory = psutil.virtual_memory()
+    ram_available = memory.available / (1024 ** 3)  # Convert to GB
+    ram_total = memory.total / (1024 ** 3)  # Convert to GB
+    ram_usage_percent = memory.percent
+    
+    # GPU Usage (if available)
+    gpu_usage = "N/A"
+    gpu_memory_used = "N/A"
+    gpu_memory_total = "N/A"
+    try:
+        pynvml.nvmlInit()
+        device_count = pynvml.nvmlDeviceGetCount()
+        if device_count > 0:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # Get first GPU
+            utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
+            memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            gpu_usage = utilization.gpu  # GPU core utilization (%)
+            gpu_memory_used = memory_info.used / (1024 ** 3)  # Convert to GB
+            gpu_memory_total = memory_info.total / (1024 ** 3)  # Convert to GB
+        pynvml.nvmlShutdown()
+    except (pynvml.NVMLError, ImportError):
+        pass  # GPU metrics will remain "N/A" if pynvml is not available or no GPU is detected
+
+    # Display metrics
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Total Conversations", total_chats)
+        st.metric("CPU Usage", f"{cpu_usage:.1f}%")
     with col2:
         st.metric("Current Model", MODEL_NAME)
+        st.metric("RAM Available", f"{ram_available:.2f} GB / {ram_total:.2f} GB")
     with col3:
-        st.metric("Database Status", "Connected" if mongo_collection else "Disconnected")
-    
+        st.metric("Database Status", "Connected" if mongo_collection is not None else "Disconnected")
+        st.metric("GPU Usage", f"{gpu_usage}%")
+        st.metric("GPU Memory", f"{gpu_memory_used} GB / {gpu_memory_total} GB" if gpu_memory_total != "N/A" else "N/A")
+
     if prompt_types:
         df = pd.DataFrame(prompt_types)
         fig = px.pie(df, values='count', names='_id', title='Prompt Types Distribution')
@@ -762,24 +850,30 @@ if st.session_state.get("show_stats", False):
         st.rerun()
 
 # Show all sessions
+# Show all sessions
 if st.session_state.get("show_sessions_history", False):
+    st.session_state.show_stats = False
+    st.session_state.show_history = False
+
     st.session_state.all_sessions = load_all_sessions_with_messages()
     st.header("📚 All Chat Sessions")
-
 
     for session in st.session_state.all_sessions:
         title = session["title"]
         date = session["timestamp"].strftime('%Y-%m-%d %H:%M') if isinstance(session["timestamp"], datetime) else "Unknown Date"
-        label = f"📌 {title} — {date} | {session['total_messages']} messages"
+        label = f"📌 {title} — {date} | {session['total_messages']} message{'s' if session['total_messages'] != 1 else ''}"
 
         with st.expander(label):
             col1, col2 = st.columns([1, 2])
             with col1:
                 if st.button("▶️ Load this session", key=f"load_{session['session_id']}"):
+                    st.session_state.show_sessions_history = False
+                    st.session_state.show_history = False
                     st.session_state.messages = []
                     for chat in session["messages"]:
                         st.session_state.messages.append({"role": "user", "content": chat["user"]})
-                        st.session_state.messages.append({"role": "assistant", "content": chat["assistant"]})
+                        if chat["assistant"]:
+                            st.session_state.messages.append({"role": "assistant", "content": chat["assistant"]})
                     st.session_state.session_id = session["session_id"]
                     st.success(f"Session '{title}' loaded!")
                     st.rerun()
@@ -791,11 +885,17 @@ if st.session_state.get("show_sessions_history", False):
                 st.markdown(f"📝 **Summary:** {session['summary']}")
 
             for i, msg in enumerate(session["messages"]):
-                st.markdown(f"**User {i+1}:** {msg['user']}")
-                st.markdown(f"**Assistant:** {msg['assistant']}")
+                if msg["user"]:
+                    st.markdown(f"**User {i//2 + 1}:** {msg['user']}")
+                if msg["assistant"]:
+                    st.markdown(f"**Assistant:** {msg['assistant']}")
 
 # Show chat history
 if st.session_state.get("show_history", False):
+    st.session_state.show_stats = False
+    st.session_state.show_sessions_history = False
+    st.session_state.show_history = True
+
     st.header("📚 Recent Chat History")
     history = load_session_history(st.session_state.get("session_id", str(uuid.uuid4())), 20)
     
@@ -815,8 +915,8 @@ if st.session_state.get("show_history", False):
 
 # Chat interface
 st.header("💬 Chat Interface")
-
 for message in st.session_state.messages:
+
     with st.chat_message(message["role"]):
         content = message["content"]
         if message["role"] == "user":
@@ -914,61 +1014,64 @@ if prompt := st.chat_input("Ask me anything about Python, ML, or MongoDB..."):
         save_chat_to_db(prompt, full_response, prompt_type)
 
 # Example prompts
-st.header("💡 Example Prompts")
-col1, col2 = st.columns(2)
+# Display Example Prompts and Footer only if no messages exist
+if not st.session_state.messages:
+    # Example prompts
+    # st.header("💡 Example Prompts")
+    # col1, col2 = st.columns(2)
 
-with col1:
-    st.subheader("Python Development")
-    example_prompts = [
-        "Create a REST API using FastAPI with authentication",
-        "Implement a decorator for caching function results",
-        "Write a class for handling CSV file operations",
-        "Create a context manager for database connections"
-    ]
-    
-    for example in example_prompts:
-        if st.button(example, key=f"py_{example[:20]}"):
-            st.session_state.messages.append({"role": "user", "content": example})
-            st.rerun()
+    # with col1:
+    #     st.subheader("Python Development")
+    #     example_prompts = [
+    #         "Create a REST API using FastAPI with authentication",
+    #         "Implement a decorator for caching function results",
+    #         "Write a class for handling CSV file operations",
+    #         "Create a context manager for database connections"
+    #     ]
+        
+    #     for example in example_prompts:
+    #         if st.button(example, key=f"py_{example[:20]}"):
+    #             st.session_state.messages.append({"role": "user", "content": example})
+    #             st.rerun()
 
-with col2:
-    st.subheader("ML Engineering")
-    ml_prompts = [
-        "Create a machine learning pipeline for text classification",
-        "Implement cross-validation for hyperparameter tuning",
-        "Build a feature engineering pipeline for time series data",
-        "Create a model evaluation framework with multiple metrics"
-    ]
-    
-    for example in ml_prompts:
-        if st.button(example, key=f"ml_{example[:20]}"):
-            st.session_state.messages.append({"role": "user", "content": example})
-            st.rerun()
+    # with col2:
+    #     st.subheader("ML Engineering")
+    #     ml_prompts = [
+    #         "Create a machine learning pipeline for text classification",
+    #         "Implement cross-validation for hyperparameter tuning",
+    #         "Build a feature engineering pipeline for time series data",
+    #         "Create a model evaluation framework with multiple metrics"
+    #     ]
+        
+    #     for example in ml_prompts:
+    #         if st.button(example, key=f"ml_{example[:20]}"):
+    #             st.session_state.messages.append({"role": "user", "content": example})
+    #             st.rerun()
 
-# Footer
-st.markdown("---")
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.markdown("**🤖 Built with:**")
-    st.markdown("• Streamlit")
-    st.markdown("• Ollama API")
-    st.markdown("• MongoDB")
-    st.markdown("• ChromaDB")
-    
-with col2:
-    st.markdown("**🌍 Perfect for:**")
-    st.markdown("• Coding & Debugging")
-    st.markdown("• Data Science & ML")
-    st.markdown("• General Knowledge & Q&A")
-    st.markdown("• Brainstorming & Ideas")
-    
-with col3:
-    st.markdown("**✨ Features:**")
-    st.markdown("• Real-time streaming replies")
-    st.markdown("• Chat history & sessions")
-    st.markdown("• Multiple expert modes")
-    st.markdown("• Persistent vector memory")
-    st.markdown("• Beautiful, modern UI")
+    # Footer
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("**🤖 Built with:**")
+        st.markdown("• Streamlit")
+        st.markdown("• Ollama API")
+        st.markdown("• MongoDB")
+        st.markdown("• ChromaDB")
+        
+    with col2:
+        st.markdown("**🌍 Perfect for:**")
+        st.markdown("• Coding & Debugging")
+        st.markdown("• Data Science & ML")
+        st.markdown("• General Knowledge & Q&A")
+        st.markdown("• Brainstorming & Ideas")
+        
+    with col3:
+        st.markdown("**✨ Features:**")
+        st.markdown("• Real-time streaming replies")
+        st.markdown("• Chat history & sessions")
+        st.markdown("• Multiple expert modes")
+        st.markdown("• Persistent vector memory")
+        st.markdown("• Beautiful, modern UI")
 
-st.markdown("---")
-st.markdown("**Pro Tip:** Try different assistant types for specialized or general help! 💡")
+    st.markdown("---")
+    st.markdown("**Pro Tip:** Try different assistant types for specialized or general help! 💡")
