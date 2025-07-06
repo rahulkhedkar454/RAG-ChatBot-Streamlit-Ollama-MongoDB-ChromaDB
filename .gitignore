@@ -1,10 +1,35 @@
-# Python-generated files
+# Byte-compiled / optimized files
 __pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+*.py[cod]
+*.so
 
 # Virtual environments
-.venv
+.venv/
+env/
+venv/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+*.eggs/
+wheels/
+
+# Editor/IDE config
+.vscode/
+.idea/
+
+# Caches and logs
+.pytest_cache/
+.mypy_cache/
+*.log
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Environment files
+.env
+.env.*
+
+# ChromaDB data (ignore completely)
+chromadb_data/
