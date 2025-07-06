@@ -66,23 +66,49 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
    ```bash
    uv pip install streamlit requests pymongo chromadb pandas plotly tiktoken tenacity ratelimit
    ```
-4. Create a `.env` file in the project root to store environment variables:
+4. Create a `.env` file in the project root to manage environment variables:
    ```bash
    touch .env
    ```
-   Add the following to `.env`:
+   Add the following to `.env` (refer to `small.env` for reference):
    ```env
-   MONGODB_URI="mongodb://localhost:27017/"
-   OLLAMA_API_URL="http://localhost:11434"
-   CHROMADB_PERSIST_DIR="./chromadb_data"
+   # --- Model & API Configuration ---
+   MODEL_NAME=phi3:mini
+   OLLAMA_API_URL=http://localhost:11434
+
+   # --- MongoDB Configuration ---
+   MONGODB_URI=mongodb://localhost:27017/
+   DATABASE_NAME=ai_assistant
+   COLLECTION_NAME=chat_history
+
+   # --- ChromaDB Configuration ---
+   CHROMCHADB_COLLECTION_NAME=ai_assistant_memory
+   CHROMADB_PERSIST_DIR=./chromadb_data
+
+   # --- Context & Summary Settings ---
+   MAX_CONTEXT_LENGTH=500
+   CONTEXT_WINDOW=10
+   SUMMARIZE_THRESHOLD=15
+
+   # --- Rate Limiting ---
+   CALLS=10
+   PERIOD=60
    ```
-   Alternatively, configure Streamlit secrets in `.streamlit/secrets.toml` for deployment:
+   **Note**: The application uses `python-dotenv` to load variables from the `.env` file. Ensure the file is correctly formatted and placed in the project root. Alternatively, configure Streamlit secrets for deployment in `.streamlit/secrets.toml`:
    ```toml
-   MONGODB_URI = "mongodb://localhost:27017/"
+   MODEL_NAME = "phi3:mini"
    OLLAMA_API_URL = "http://localhost:11434"
+   MONGODB_URI = "mongodb://localhost:27017/"
+   DATABASE_NAME = "ai_assistant"
+   COLLECTION_NAME = "chat_history"
+   CHROMCHADB_COLLECTION_NAME = "ai_assistant_memory"
    CHROMADB_PERSIST_DIR = "./chromadb_data"
+   MAX_CONTEXT_LENGTH = 500
+   CONTEXT_WINDOW = 10
+   SUMMARIZE_THRESHOLD = 15
+   CALLS = 10
+   PERIOD = 60
    ```
-   **Note**: Ensure the `.env` file is loaded using a package like `python-dotenv` (add `uv pip install python-dotenv` if required by the application).
 
 ### Step 5: Run the Application
 Run the Streamlit application:
