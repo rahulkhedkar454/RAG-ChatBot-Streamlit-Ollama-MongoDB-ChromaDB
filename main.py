@@ -104,17 +104,17 @@ def init_mongodb():
         st.error("❌ MongoDB connection failed. Please ensure MongoDB is running.")
         return None, None
 
-def cleanup_mongodb():
-    """Close MongoDB connection."""
-    try:
-        if 'mongo_client' in st.session_state and st.session_state.mongo_client:
-            st.session_state.mongo_client.close()
-            del st.session_state.mongo_client
-    except Exception as e:
-        st.warning(f"Failed to cleanup MongoDB: {str(e)}")
+# def cleanup_mongodb():
+#     """Close MongoDB connection."""
+#     try:
+#         if 'mongo_client' in st.session_state and st.session_state.mongo_client:
+#             st.session_state.mongo_client.close()
+#             del st.session_state.mongo_client
+#     except Exception as e:
+#         st.warning(f"Failed to cleanup MongoDB: {str(e)}")
 
 # Register MongoDB cleanup on process exit
-atexit.register(cleanup_mongodb)
+# atexit.register(cleanup_mongodb)
 
 mongo_collection, mongo_client = init_mongodb()
 if mongo_client:
@@ -671,7 +671,7 @@ with st.sidebar:
     if st.button("🆕 New Chat Session"):
         st.session_state.messages = []
         st.session_state.session_id = str(uuid.uuid4())
-        cleanup_mongodb()  # Clean up MongoDB connection on new session
+        # cleanup_mongodb()  # Clean up MongoDB connection on new session
         st.success("Started new chat session!")
         st.rerun()
     
@@ -702,7 +702,7 @@ with st.sidebar:
 
     if st.button("🗑️ Clear Current Chat"):
         st.session_state.messages = []
-        cleanup_mongodb()  # Clean up MongoDB connection on clear
+        # cleanup_mongodb()  # Clean up MongoDB connection on clear
         st.rerun()
     
     if st.button("🔄 Refresh Models"):
@@ -765,6 +765,7 @@ if st.session_state.get("show_stats", False):
 if st.session_state.get("show_sessions_history", False):
     st.session_state.all_sessions = load_all_sessions_with_messages()
     st.header("📚 All Chat Sessions")
+
 
     for session in st.session_state.all_sessions:
         title = session["title"]
